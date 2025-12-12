@@ -2,22 +2,28 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>手势控制 - 圣诞魔法</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>手势控制 - 圣诞魔法 (移动端修复版)</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #020402; font-family: 'Microsoft YaHei', 'SimHei', sans-serif; touch-action: none; }
         #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
         
         /* 摄像头画面容器 */
         #video-container {
-            position: absolute; bottom: 20px; right: 20px; width: 120px; height: 90px; 
+            position: absolute; bottom: 20px; right: 20px; width: 120px; height: 160px; /* 竖屏比例 */
             z-index: 2; border-radius: 8px; overflow: hidden; border: 2px solid #D4AF37;
             opacity: 0.6; transform: scaleX(-1); /* 镜像翻转 */
             box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
             transition: opacity 0.3s;
+            background: #000;
         }
         #video-container:hover { opacity: 1; }
-        video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* 关键修改：确保视频元素填满容器且不被隐藏 */
+        video { 
+            width: 100%; height: 100%; object-fit: cover; 
+            display: block; 
+        }
         
         /* 加载提示 */
         #loading {
@@ -76,7 +82,7 @@
 
         /* --- 移动端适配 --- */
         @media (max-width: 768px) {
-            #video-container { width: 90px; height: 68px; bottom: 15px; right: 15px; }
+            #video-container { width: 90px; height: 120px; bottom: 15px; right: 15px; } /* 调整为竖屏比例 */
             #ui-layer { top: 20px; left: 20px; }
             .status-value { font-size: 28px; margin-bottom: 10px; }
             .instruction-list { padding: 10px 15px; font-size: 12px; line-height: 1.8; background: rgba(0,0,0,0.6); }
@@ -99,7 +105,6 @@
         </div>
         
         <div id="upload-container">
-            <!-- 允许选择多个文件 -->
             <input type="file" id="file-input" accept="image/*" multiple>
             <label for="file-input" class="upload-btn">
                 📷 上传照片 (支持多选)
@@ -111,7 +116,7 @@
     <div id="canvas-container"></div>
     
     <div id="video-container">
-        <video id="input-video" playsinline></video>
+        <video id="input-video" autoplay muted playsinline webkit-playsinline></video>
     </div>
 
     <script type="importmap">
@@ -133,7 +138,7 @@
 
         // --- 配置 ---
         const GROUPS = [
-            { id: 'card', totalCount: 600, type: 'plane' }, // 卡片总数
+            { id: 'card', totalCount: 600, type: 'plane' },
             { id: 'orb', totalCount: 500, type: 'sphere' },
             { id: 'star', totalCount: 500, type: 'star' },
             { id: 'box', totalCount: 500, type: 'box' }
@@ -149,9 +154,7 @@
         let currentState = STATE.INTRO;
         let isIntroFinished = false;
 
-        // meshes 现在存储 mesh 数组： meshes['card'] = [mesh1, mesh2...]
         let meshes = {}; 
-        // positions 现在存储位置数组的数组： positions['card'] = [ [posArray1], [posArray2]... ]
         let positions = {}; 
         let dummy = new THREE.Object3D();
         let bgStars; 
@@ -161,7 +164,7 @@
         
         let handX = 0, handY = 0; 
         let isHandPresent = false;
-        let handSpread = 0.25; // 手掌张开程度 (0.1 ~ 0.4)
+        let handSpread = 0.25; 
         
         let touchStartX = 0, touchStartY = 0;
         let touchCurrentX = 0, touchCurrentY = 0;
@@ -169,21 +172,14 @@
         let longPressTimer = null;
         let lastTapTime = 0;
 
-        // 当前查看的照片目标索引
         let detailTarget = { meshIndex: 0, instanceIndex: 0 };
-
-        // 全局纹理引用
         let cardTextureCanvas, cardTexture;
 
-        // --- 随机选择照片逻辑 ---
         function pickRandomDetailTarget() {
             if (!meshes['card'] || meshes['card'].length === 0) return;
-            // 随机选择一个 Mesh (即一张照片)
             const mIndex = Math.floor(Math.random() * meshes['card'].length);
             const count = meshes['card'][mIndex].count;
-            // 随机选择该 Mesh 中的一个粒子
             const iIndex = Math.floor(Math.random() * count);
-            
             detailTarget = { meshIndex: mIndex, instanceIndex: iIndex };
         }
 
@@ -225,13 +221,11 @@
             return new THREE.CanvasTexture(canvas);
         }
 
-        // 处理文件上传 (支持多图)
         function setupFileUpload() {
             const input = document.getElementById('file-input');
             input.addEventListener('change', (e) => {
                 const files = Array.from(e.target.files);
                 if (files.length > 0) {
-                    // 读取所有文件
                     Promise.all(files.map(file => {
                         return new Promise((resolve) => {
                             const reader = new FileReader();
@@ -243,12 +237,9 @@
                             reader.readAsDataURL(file);
                         });
                     })).then(images => {
-                        // 拿到所有图片对象后，重建卡片系统
                         rebuildCardMeshes(images);
-                        
-                        // 切换展示效果
                         if (currentState !== STATE.DETAIL) {
-                            pickRandomDetailTarget(); // 随机选一张
+                            pickRandomDetailTarget(); 
                             currentState = STATE.DETAIL;
                             updateUI(STATE.DETAIL);
                             setTimeout(() => {
@@ -274,7 +265,7 @@
 
             renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // 降低移动端压力
             renderer.toneMapping = THREE.ACESFilmicToneMapping;
             renderer.toneMappingExposure = 1.2;
             container.appendChild(renderer.domElement);
@@ -295,16 +286,14 @@
             const renderScene = new RenderPass(scene, camera);
             const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth/4, window.innerHeight/4), 1.5, 0.4, 0.85);
             bloomPass.threshold = 0.2; 
-            bloomPass.strength = 1.5; 
-            bloomPass.radius = 0.8; 
+            bloomPass.strength = 1.2; 
+            bloomPass.radius = 0.5; 
 
             composer = new EffectComposer(renderer);
             composer.addPass(renderScene);
             composer.addPass(bloomPass);
 
             createBackgroundStars();
-            
-            // 初始创建所有模型 (默认 1 张默认卡片图)
             createMultiModelSystem(); 
             
             window.addEventListener('resize', onWindowResize);
@@ -339,14 +328,11 @@
             scene.add(bgStars);
         }
 
-        // 核心：创建多组模型 (现已改为支持 mesh 数组)
         function createMultiModelSystem() {
             GROUPS.forEach(group => {
-                // 如果是 card，单独处理，初始化时没有图片传 null
                 if (group.id === 'card') {
-                    rebuildCardMeshes(null); // null 会生成默认金色卡片
+                    rebuildCardMeshes(null); 
                 } else {
-                    // 其他组 (orb, star, box) 保持单 Mesh 模式，但为了统一，我们放入数组
                     const meshData = generateMeshAndData(group, group.totalCount); 
                     scene.add(meshData.mesh);
                     meshes[group.id] = [meshData.mesh];
@@ -355,9 +341,7 @@
             });
         }
 
-        // 重建卡片系统 (用于上传图片后)
         function rebuildCardMeshes(imagesArray) {
-            // 1. 清理旧的 Card Meshes
             if (meshes['card']) {
                 meshes['card'].forEach(mesh => {
                     scene.remove(mesh);
@@ -373,19 +357,16 @@
             const cardGroup = GROUPS.find(g => g.id === 'card');
             const totalCount = cardGroup.totalCount;
 
-            // 2. 确定分组
             let batches = [];
             if (!imagesArray || imagesArray.length === 0) {
-                // 默认情况：1组，默认纹理
                 batches.push({ count: totalCount, texture: createCardTexture(null) });
             } else {
-                // 多图情况：平均分配
                 const countPerImage = Math.floor(totalCount / imagesArray.length);
                 let remainder = totalCount % imagesArray.length;
                 
                 imagesArray.forEach((img, index) => {
                     let c = countPerImage;
-                    if (index < remainder) c++; // 分配余数
+                    if (index < remainder) c++; 
                     if (c > 0) {
                         batches.push({ count: c, texture: createCardTexture(img) });
                     }
@@ -400,7 +381,6 @@
             });
         }
 
-        // 通用 Mesh 生成器
         function generateMeshAndData(groupDef, count, customTexture = null) {
             let geometry, material;
 
@@ -408,7 +388,7 @@
                 geometry = new THREE.PlaneGeometry(0.5, 0.65);
                 material = new THREE.MeshStandardMaterial({
                     color: 0xffffff, 
-                    map: customTexture, // 使用传入的纹理
+                    map: customTexture,
                     roughness: 0.3, metalness: 0.4, side: THREE.DoubleSide
                 });
             } else if (groupDef.type === 'sphere') { 
@@ -433,7 +413,6 @@
 
             const mesh = new THREE.InstancedMesh(geometry, material, count);
             
-            // 数据生成
             const groupData = { tree: [], scatter: [], intro: [] };
             const currentPosList = [];
             
@@ -478,12 +457,10 @@
                 }
                 groupData.tree.push({ x: tx, y: ty, z: tz, rx: Math.random(), ry: Math.random(), rz: Math.random() });
 
-                // 初始位置设为 Intro (或者 scatter，如果是后期重建)
                 currentPosList.push({ ...groupData.intro[i] });
             }
 
             mesh.userData = groupData;
-            
             return { mesh: mesh, positions: currentPosList };
         }
 
@@ -511,7 +488,7 @@
                 longPressTimer = setTimeout(() => {
                     if (Math.abs(touchCurrentX - touchStartX) < 10 && Math.abs(touchCurrentY - touchStartY) < 10) {
                         if (currentState !== STATE.DETAIL) {
-                            pickRandomDetailTarget(); // 触发随机选择
+                            pickRandomDetailTarget(); 
                             currentState = STATE.DETAIL;
                             updateUI(STATE.DETAIL);
                             if (navigator.vibrate) navigator.vibrate(50);
@@ -545,7 +522,6 @@
                 
                 if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
                     const now = Date.now();
-                    // 单击切换
                     if (currentState === STATE.TREE) {
                         currentState = STATE.SCATTER;
                         updateUI(STATE.SCATTER);
@@ -570,7 +546,6 @@
                 bgStars.rotation.z = time * 0.01;
             }
 
-            // 相机逻辑
             if (!isIntroFinished) {
                 camera.position.z += (25 - camera.position.z) * 0.03;
                 camera.lookAt(0,0,0);
@@ -578,19 +553,13 @@
                 const controlX = isHandPresent ? handX : (isTouching ? handX * 2 : 0);
                 const controlY = isHandPresent ? handY : (isTouching ? handY * 2 : 0);
                 
-                // 1. 视角旋转
                 camera.position.x += (controlX * 28 - camera.position.x) * 0.08; 
                 camera.position.y += (controlY * 18 - camera.position.y) * 0.08;
                 
-                // 2. 深度控制 (基于手掌张开程度)
-                // 映射 handSpread (0.1闭合 ~ 0.4张开) 到 Z轴 (50远 ~ 15近)
-                // 张开 -> Z变小(近); 闭合 -> Z变大(远)
                 let targetZ = 50 - (handSpread - 0.1) / (0.4 - 0.1) * 35;
-                // 限制范围
                 targetZ = Math.max(15, Math.min(55, targetZ));
                 
                 camera.position.z += (targetZ - camera.position.z) * 0.05;
-                
                 camera.lookAt(0,0,0);
             } else if (currentState === STATE.TREE) {
                 const r = 22;
@@ -602,7 +571,6 @@
 
             const moveSpeed = isIntroFinished ? 3.0 * dt : 1.5 * dt; 
 
-            // 遍历所有组 (现在支持每个 group.id 对应多个 mesh)
             GROUPS.forEach(group => {
                 const meshArray = meshes[group.id];
                 const posArrayArray = positions[group.id];
@@ -626,9 +594,8 @@
                         let tx = t.x, ty = t.y, tz = t.z;
                         
                         if (currentState === STATE.DETAIL) {
-                            // Detail 模式逻辑：如果是随机选中的那个 Mesh 的那个粒子，就展示，而且变得非常大、非常近
                             if (group.id === 'card' && meshIndex === detailTarget.meshIndex && i === detailTarget.instanceIndex) {
-                                tx = 0; ty = 0; tz = 25; // 距离相机非常近
+                                tx = 0; ty = 0; tz = 25; 
                             } else {
                                 tx *= 1.8; ty *= 1.8; tz -= 10;
                             }
@@ -659,7 +626,7 @@
                         dummy.rotation.set(c.rx, c.ry, c.rz);
                         
                         let scale = 1;
-                        if (group.id === 'card' && currentState === STATE.DETAIL && meshIndex === detailTarget.meshIndex && i === detailTarget.instanceIndex) scale = 10; // 放大10倍
+                        if (group.id === 'card' && currentState === STATE.DETAIL && meshIndex === detailTarget.meshIndex && i === detailTarget.instanceIndex) scale = 10; 
                         else if (group.id === 'star') scale = 1 + Math.sin(time*5 + i)*0.4; 
                         
                         dummy.scale.set(scale, scale, scale);
@@ -680,7 +647,7 @@
             composer.setSize(window.innerWidth, window.innerHeight);
         }
 
-        // --- AI 手势 ---
+        // --- AI 手势 (修复版: 放弃 camera_utils 使用原生 API) ---
         function loadScript(url) {
             return new Promise((resolve, reject) => {
                 const script = document.createElement('script');
@@ -697,18 +664,54 @@
             await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js");
 
             const videoElement = document.getElementById('input-video');
+            
             const hands = new window.Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
 
             hands.setOptions({
-                maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6
+                maxNumHands: 1, 
+                modelComplexity: 0, // 移动端性能优化: 使用 Lite 模型
+                minDetectionConfidence: 0.5, 
+                minTrackingConfidence: 0.5
             });
             hands.onResults(onResults);
 
-            const cameraUtils = new window.Camera(videoElement, {
-                onFrame: async () => { await hands.send({image: videoElement}); },
-                width: 320, height: 240
-            });
-            cameraUtils.start();
+            // 移动端专用配置
+            const constraints = {
+                video: {
+                    facingMode: 'user', // 强制前置
+                    width: { ideal: 480 }, // 降低分辨率以提高帧率
+                    height: { ideal: 640 }
+                }
+            };
+
+            // 使用原生 getUserMedia 替代 Camera Utils
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoElement.srcObject = stream;
+                // 静音播放是iOS允许自动播放的前提
+                videoElement.muted = true;
+                
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play();
+                    // 启动手动检测循环
+                    requestAnimationFrame(predictWebcam);
+                };
+            } catch (err) {
+                console.error("摄像头启动失败:", err);
+                if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                    alert("错误：必须使用 HTTPS 协议访问才能使用摄像头。");
+                } else {
+                    alert("无法访问摄像头，请检查权限。");
+                }
+            }
+
+            async function predictWebcam() {
+                // 只有当视频尺寸有效时才发送给 AI
+                if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0 && !videoElement.paused) {
+                    await hands.send({image: videoElement});
+                }
+                requestAnimationFrame(predictWebcam);
+            }
         }
 
         function onResults(results) {
@@ -723,16 +726,13 @@
         }
 
         function detectGesture(lm) {
-            // 计算手指尖到手腕的距离，判断张开程度
             const tips = [8, 12, 16, 20];
             let totalDist = 0;
             tips.forEach(tip => {
                 totalDist += Math.sqrt(Math.pow(lm[tip].x - lm[0].x, 2) + Math.pow(lm[tip].y - lm[0].y, 2));
             });
-            // 归一化平均距离作为手掌张开系数
             handSpread = totalDist / 4; 
 
-            // 常规状态判断
             const dist = (i, j) => Math.sqrt(Math.pow(lm[i].x-lm[j].x, 2) + Math.pow(lm[i].y-lm[j].y, 2));
             const fingerTips = [8, 12, 16, 20]; const fingerBases = [5, 9, 13, 17];
             const isExt = [false, false, false, false, false]; 
@@ -749,7 +749,7 @@
             else if (extCount >= 4) newState = STATE.SCATTER; 
 
             if (newState !== currentState) {
-                if (newState === STATE.DETAIL) pickRandomDetailTarget(); // 进入 Detail 前随机选择
+                if (newState === STATE.DETAIL) pickRandomDetailTarget(); 
                 currentState = newState;
                 updateUI(currentState);
             }
