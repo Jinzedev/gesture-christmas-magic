@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>手势控制 - 圣诞魔法</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #020402; font-family: 'Microsoft YaHei', 'SimHei', sans-serif; touch-action: none; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        /* 摄像头画面容器 */
+        #video-container {
+            position: absolute; bottom: 20px; right: 20px; width: 120px; height: 90px; 
+            z-index: 2; border-radius: 8px; overflow: hidden; border: 2px solid #D4AF37;
+            opacity: 0.6; transform: scaleX(-1); /* 镜像翻转 */
+            box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
+            transition: opacity 0.3s;
+        }
+        #video-container:hover { opacity: 1; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* 加载提示 */
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #D4AF37; font-size: 18px; z-index: 10; letter-spacing: 4px;
+            text-transform: uppercase; text-shadow: 0 0 10px rgba(212, 175, 55, 0.8);
+            pointer-events: none; transition: opacity 0.8s ease-out;
+            font-weight: 300; width: 100%; text-align: center;
+        }
+        
+        /* UI 界面 */
+        #ui-layer {
+            position: absolute; top: 40px; left: 30px; z-index: 3; color: rgba(255,255,255,0.9);
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+        .status-label { font-size: 12px; color: #aaa; letter-spacing: 1px; margin-bottom: 5px; }
+        .status-value { font-size: 36px; font-weight: bold; color: #D4AF37; margin-bottom: 20px; letter-spacing: 2px;}
+        
+        .instruction-list { 
+            font-size: 14px; line-height: 2.2; color: #ccc; 
+            background: linear-gradient(90deg, rgba(0,0,0,0.8), rgba(0,0,0,0)); 
+            padding: 15px 20px; border-left: 3px solid #D4AF37; 
+            backdrop-filter: blur(4px);
+            transform: translateX(-20px); opacity: 0; 
+            animation: slideIn 1s ease-out 1s forwards;
+        }
+        
+        @keyframes slideIn { to { transform: translateX(0); opacity: 1; } }
+
+        .instruction-item span { color: #D4AF37; font-weight: bold; margin-right: 10px; font-size: 18px; vertical-align: middle;}
+        
+        /* 移动端触屏提示 */
+        .mobile-hint {
+            display: none; font-size: 12px; color: #888; margin-top: 10px; font-style: italic;
+        }
+
+        /* 上传按钮 */
+        #upload-container {
+            margin-top: 20px; pointer-events: auto;
+        }
+        #file-input { display: none; }
+        .upload-btn {
+            background: rgba(212, 175, 55, 0.2); border: 1px solid #D4AF37; color: #D4AF37;
+            padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 14px;
+            transition: all 0.3s; display: inline-flex; align-items: center; gap: 8px;
+        }
+        .upload-btn:hover { background: #D4AF37; color: #000; }
+
+        /* 电影感暗角 */
+        .vignette {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 30%, rgba(2,4,2,0.8) 80%, rgba(0,0,0,1) 100%);
+            z-index: 2; pointer-events: none;
+        }
+
+        /* --- 移动端适配 --- */
+        @media (max-width: 768px) {
+            #video-container { width: 90px; height: 68px; bottom: 15px; right: 15px; }
+            #ui-layer { top: 20px; left: 20px; }
+            .status-value { font-size: 28px; margin-bottom: 10px; }
+            .instruction-list { padding: 10px 15px; font-size: 12px; line-height: 1.8; background: rgba(0,0,0,0.6); }
+            .mobile-hint { display: block; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">正在启动魔法...</div>
+    
+    <div id="ui-layer">
+        <div class="status-label">当前状态</div>
+        <div class="status-value" id="state-text">初始化中</div>
+        <div class="instruction-list">
+            <div class="instruction-item"><span>🖐 / 张手</span> 星河散开 (张合控制远近)</div>
+            <div class="instruction-item"><span>✊ / 单击</span> 聚合成树</div>
+            <div class="instruction-item"><span>👌 / 长按</span> 查看随机照片</div>
+            <div class="mobile-hint">左右滑动旋转视角</div>
+        </div>
+        
+        <div id="upload-container">
+            <!-- 允许选择多个文件 -->
+            <input type="file" id="file-input" accept="image/*" multiple>
+            <label for="file-input" class="upload-btn">
+                📷 上传照片 (支持多选)
+            </label>
+        </div>
+    </div>
+
+    <div class="vignette"></div>
+    <div id="canvas-container"></div>
+    
+    <div id="video-container">
+        <video id="input-video" playsinline></video>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+                "@mediapipe/hands": "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js",
+                "@mediapipe/camera_utils": "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 配置 ---
+        const GROUPS = [
+            { id: 'card', totalCount: 600, type: 'plane' }, // 卡片总数
+            { id: 'orb', totalCount: 500, type: 'sphere' },
+            { id: 'star', totalCount: 500, type: 'star' },
+            { id: 'box', totalCount: 500, type: 'box' }
+        ];
+
+        const STATE = {
+            INTRO: 'intro', 
+            TREE: 'tree',
+            SCATTER: 'scatter',
+            DETAIL: 'detail'
+        };
+
+        let currentState = STATE.INTRO;
+        let isIntroFinished = false;
+
+        // meshes 现在存储 mesh 数组： meshes['card'] = [mesh1, mesh2...]
+        let meshes = {}; 
+        // positions 现在存储位置数组的数组： positions['card'] = [ [posArray1], [posArray2]... ]
+        let positions = {}; 
+        let dummy = new THREE.Object3D();
+        let bgStars; 
+        
+        let scene, camera, renderer, composer;
+        let clock = new THREE.Clock();
+        
+        let handX = 0, handY = 0; 
+        let isHandPresent = false;
+        let handSpread = 0.25; // 手掌张开程度 (0.1 ~ 0.4)
+        
+        let touchStartX = 0, touchStartY = 0;
+        let touchCurrentX = 0, touchCurrentY = 0;
+        let isTouching = false;
+        let longPressTimer = null;
+        let lastTapTime = 0;
+
+        // 当前查看的照片目标索引
+        let detailTarget = { meshIndex: 0, instanceIndex: 0 };
+
+        // 全局纹理引用
+        let cardTextureCanvas, cardTexture;
+
+        // --- 随机选择照片逻辑 ---
+        function pickRandomDetailTarget() {
+            if (!meshes['card'] || meshes['card'].length === 0) return;
+            // 随机选择一个 Mesh (即一张照片)
+            const mIndex = Math.floor(Math.random() * meshes['card'].length);
+            const count = meshes['card'][mIndex].count;
+            // 随机选择该 Mesh 中的一个粒子
+            const iIndex = Math.floor(Math.random() * count);
+            
+            detailTarget = { meshIndex: mIndex, instanceIndex: iIndex };
+        }
+
+        // --- 1. 材质与纹理系统 ---
+        function createCardTexture(imageSource) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; 
+            canvas.height = 160;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.fillStyle = '#FAFAFA'; 
+            ctx.fillRect(0, 0, 128, 160);
+            
+            if (imageSource instanceof HTMLImageElement) {
+                const aspect = imageSource.width / imageSource.height;
+                const targetAspect = 98 / 98; 
+                let sx = 0, sy = 0, sWidth = imageSource.width, sHeight = imageSource.height;
+
+                if (aspect > targetAspect) { 
+                    sWidth = imageSource.height * targetAspect;
+                    sx = (imageSource.width - sWidth) / 2;
+                } else { 
+                    sHeight = imageSource.width / targetAspect;
+                    sy = (imageSource.height - sHeight) / 2;
+                }
+                ctx.drawImage(imageSource, sx, sy, sWidth, sHeight, 15, 15, 98, 98);
+            } else {
+                const grad = ctx.createLinearGradient(0,0,128,160);
+                grad.addColorStop(0, '#D4AF37');
+                grad.addColorStop(1, '#222');
+                ctx.fillStyle = grad;
+                ctx.fillRect(15, 15, 98, 98);
+            }
+            
+            ctx.strokeStyle = '#D4AF37'; 
+            ctx.lineWidth = 4; 
+            ctx.strokeRect(15, 15, 98, 98);
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // 处理文件上传 (支持多图)
+        function setupFileUpload() {
+            const input = document.getElementById('file-input');
+            input.addEventListener('change', (e) => {
+                const files = Array.from(e.target.files);
+                if (files.length > 0) {
+                    // 读取所有文件
+                    Promise.all(files.map(file => {
+                        return new Promise((resolve) => {
+                            const reader = new FileReader();
+                            reader.onload = (event) => {
+                                const img = new Image();
+                                img.onload = () => resolve(img);
+                                img.src = event.target.result;
+                            };
+                            reader.readAsDataURL(file);
+                        });
+                    })).then(images => {
+                        // 拿到所有图片对象后，重建卡片系统
+                        rebuildCardMeshes(images);
+                        
+                        // 切换展示效果
+                        if (currentState !== STATE.DETAIL) {
+                            pickRandomDetailTarget(); // 随机选一张
+                            currentState = STATE.DETAIL;
+                            updateUI(STATE.DETAIL);
+                            setTimeout(() => {
+                                if(currentState === STATE.DETAIL) {
+                                    currentState = STATE.TREE;
+                                    updateUI(STATE.TREE);
+                                }
+                            }, 3000);
+                        }
+                    });
+                }
+            });
+        }
+
+        // --- 3. 初始化 ---
+        function initThree() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x020402, 0.005); 
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 0, 40); 
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
+            container.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); 
+            scene.add(ambientLight);
+            const sunLight = new THREE.DirectionalLight(0xfffaed, 2.5);
+            sunLight.position.set(20, 20, 20);
+            scene.add(sunLight);
+            const bottomLight = new THREE.PointLight(0xD4AF37, 2, 20); 
+            bottomLight.position.set(0, -10, 5);
+            scene.add(bottomLight);
+            const rimLight = new THREE.SpotLight(0x4455ff, 5); 
+            rimLight.position.set(0, 10, -20);
+            rimLight.lookAt(0,0,0);
+            scene.add(rimLight);
+
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth/4, window.innerHeight/4), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0.2; 
+            bloomPass.strength = 1.5; 
+            bloomPass.radius = 0.8; 
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            createBackgroundStars();
+            
+            // 初始创建所有模型 (默认 1 张默认卡片图)
+            createMultiModelSystem(); 
+            
+            window.addEventListener('resize', onWindowResize);
+            setupTouchEvents();
+            setupFileUpload();
+            
+            startIntroAnimation();
+        }
+
+        function createBackgroundStars() {
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            for (let i = 0; i < 1500; i++) {
+                const r = 40 + Math.random() * 60; 
+                const theta = Math.random() * 2 * Math.PI;
+                const phi = Math.acos(2 * Math.random() - 1);
+                vertices.push(
+                    r * Math.sin(phi) * Math.cos(theta),
+                    r * Math.sin(phi) * Math.sin(theta),
+                    r * Math.cos(phi)
+                );
+            }
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            const material = new THREE.PointsMaterial({
+                color: 0x8899aa,
+                size: 0.3,
+                transparent: true,
+                opacity: 0.6,
+                sizeAttenuation: true
+            });
+            bgStars = new THREE.Points(geometry, material);
+            scene.add(bgStars);
+        }
+
+        // 核心：创建多组模型 (现已改为支持 mesh 数组)
+        function createMultiModelSystem() {
+            GROUPS.forEach(group => {
+                // 如果是 card，单独处理，初始化时没有图片传 null
+                if (group.id === 'card') {
+                    rebuildCardMeshes(null); // null 会生成默认金色卡片
+                } else {
+                    // 其他组 (orb, star, box) 保持单 Mesh 模式，但为了统一，我们放入数组
+                    const meshData = generateMeshAndData(group, group.totalCount); 
+                    scene.add(meshData.mesh);
+                    meshes[group.id] = [meshData.mesh];
+                    positions[group.id] = [meshData.positions];
+                }
+            });
+        }
+
+        // 重建卡片系统 (用于上传图片后)
+        function rebuildCardMeshes(imagesArray) {
+            // 1. 清理旧的 Card Meshes
+            if (meshes['card']) {
+                meshes['card'].forEach(mesh => {
+                    scene.remove(mesh);
+                    mesh.geometry.dispose();
+                    mesh.material.map && mesh.material.map.dispose();
+                    mesh.material.dispose();
+                });
+            }
+
+            meshes['card'] = [];
+            positions['card'] = [];
+
+            const cardGroup = GROUPS.find(g => g.id === 'card');
+            const totalCount = cardGroup.totalCount;
+
+            // 2. 确定分组
+            let batches = [];
+            if (!imagesArray || imagesArray.length === 0) {
+                // 默认情况：1组，默认纹理
+                batches.push({ count: totalCount, texture: createCardTexture(null) });
+            } else {
+                // 多图情况：平均分配
+                const countPerImage = Math.floor(totalCount / imagesArray.length);
+                let remainder = totalCount % imagesArray.length;
+                
+                imagesArray.forEach((img, index) => {
+                    let c = countPerImage;
+                    if (index < remainder) c++; // 分配余数
+                    if (c > 0) {
+                        batches.push({ count: c, texture: createCardTexture(img) });
+                    }
+                });
+            }
+
+            batches.forEach(batch => {
+                const data = generateMeshAndData(cardGroup, batch.count, batch.texture);
+                scene.add(data.mesh);
+                meshes['card'].push(data.mesh);
+                positions['card'].push(data.positions);
+            });
+        }
+
+        // 通用 Mesh 生成器
+        function generateMeshAndData(groupDef, count, customTexture = null) {
+            let geometry, material;
+
+            if (groupDef.type === 'plane') {
+                geometry = new THREE.PlaneGeometry(0.5, 0.65);
+                material = new THREE.MeshStandardMaterial({
+                    color: 0xffffff, 
+                    map: customTexture, // 使用传入的纹理
+                    roughness: 0.3, metalness: 0.4, side: THREE.DoubleSide
+                });
+            } else if (groupDef.type === 'sphere') { 
+                geometry = new THREE.IcosahedronGeometry(0.28, 1);
+                material = new THREE.MeshStandardMaterial({
+                    color: 0x880000, roughness: 0.05, metalness: 0.7, 
+                    emissive: 0x220000, emissiveIntensity: 0.5
+                });
+            } else if (groupDef.type === 'star') { 
+                geometry = new THREE.OctahedronGeometry(0.22, 0);
+                material = new THREE.MeshStandardMaterial({
+                    color: 0xFFD700, roughness: 0.2, metalness: 1.0, 
+                    emissive: 0xFFAA00, emissiveIntensity: 0.8 
+                });
+            } else if (groupDef.type === 'box') { 
+                geometry = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+                material = new THREE.MeshStandardMaterial({
+                    color: 0x004422, roughness: 0.4, metalness: 0.2,
+                    transparent: true, opacity: 0.9
+                });
+            }
+
+            const mesh = new THREE.InstancedMesh(geometry, material, count);
+            
+            // 数据生成
+            const groupData = { tree: [], scatter: [], intro: [] };
+            const currentPosList = [];
+            
+            for (let i = 0; i < count; i++) {
+                // SCATTER
+                const r = 25 * Math.cbrt(Math.random());
+                const theta = Math.random() * 2 * Math.PI;
+                const phi = Math.acos(2 * Math.random() - 1);
+                groupData.scatter.push({
+                    x: r * Math.sin(phi) * Math.cos(theta),
+                    y: r * Math.sin(phi) * Math.sin(theta),
+                    z: r * Math.cos(phi),
+                    rx: Math.random()*3, ry: Math.random()*3, rz: Math.random()*3
+                });
+
+                // INTRO
+                const introDist = 60 + Math.random() * 40;
+                groupData.intro.push({
+                    x: introDist * Math.sin(phi) * Math.cos(theta),
+                    y: introDist * Math.sin(phi) * Math.sin(theta),
+                    z: introDist * Math.cos(phi),
+                    rx: Math.random()*10, ry: Math.random()*10, rz: Math.random()*10
+                });
+
+                // TREE
+                const t = Math.random(); 
+                const height = -8 + t * 16; 
+                const maxR = (1 - t) * 7 + 0.2; 
+                const angle = Math.random() * Math.PI * 2;
+                let tx, ty, tz;
+
+                if (groupDef.type === 'box') {
+                    const volR = Math.sqrt(Math.random()) * maxR * 0.8; 
+                    tx = Math.cos(angle) * volR; ty = height; tz = Math.sin(angle) * volR;
+                } else if (groupDef.type === 'sphere') {
+                    tx = Math.cos(angle) * maxR; ty = height; tz = Math.sin(angle) * maxR;
+                } else if (groupDef.type === 'plane') {
+                    const spiralAngle = t * Math.PI * 18;
+                    tx = Math.cos(spiralAngle) * (maxR + 0.5); ty = height; tz = Math.sin(spiralAngle) * (maxR + 0.5);
+                } else {
+                    tx = Math.cos(angle) * (maxR + 0.4); ty = height; tz = Math.sin(angle) * (maxR + 0.4);
+                }
+                groupData.tree.push({ x: tx, y: ty, z: tz, rx: Math.random(), ry: Math.random(), rz: Math.random() });
+
+                // 初始位置设为 Intro (或者 scatter，如果是后期重建)
+                currentPosList.push({ ...groupData.intro[i] });
+            }
+
+            mesh.userData = groupData;
+            
+            return { mesh: mesh, positions: currentPosList };
+        }
+
+        function startIntroAnimation() {
+            setTimeout(() => {
+                currentState = STATE.TREE;
+                isIntroFinished = true;
+                updateUI(STATE.TREE);
+                document.getElementById('loading').style.opacity = 0;
+            }, 500);
+        }
+
+        // --- 触屏交互 ---
+        function setupTouchEvents() {
+            document.addEventListener('gesturestart', (e) => e.preventDefault());
+
+            document.addEventListener('touchstart', (e) => {
+                if (!isIntroFinished) return;
+                isTouching = true;
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+                touchCurrentX = touchStartX;
+                touchCurrentY = touchStartY;
+
+                longPressTimer = setTimeout(() => {
+                    if (Math.abs(touchCurrentX - touchStartX) < 10 && Math.abs(touchCurrentY - touchStartY) < 10) {
+                        if (currentState !== STATE.DETAIL) {
+                            pickRandomDetailTarget(); // 触发随机选择
+                            currentState = STATE.DETAIL;
+                            updateUI(STATE.DETAIL);
+                            if (navigator.vibrate) navigator.vibrate(50);
+                        }
+                    }
+                }, 600); 
+            }, { passive: false });
+
+            document.addEventListener('touchmove', (e) => {
+                if (!isIntroFinished) return;
+                touchCurrentX = e.touches[0].clientX;
+                touchCurrentY = e.touches[0].clientY;
+                
+                handX = (touchCurrentX / window.innerWidth - 0.5) * 2;
+                handY = (touchCurrentY / window.innerHeight - 0.5) * 2;
+            }, { passive: false });
+
+            document.addEventListener('touchend', (e) => {
+                if (!isIntroFinished) return;
+                isTouching = false;
+                clearTimeout(longPressTimer);
+                
+                if (currentState === STATE.DETAIL) {
+                    currentState = STATE.TREE;
+                    updateUI(STATE.TREE);
+                    return;
+                }
+
+                const dx = touchCurrentX - touchStartX;
+                const dy = touchCurrentY - touchStartY;
+                
+                if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+                    const now = Date.now();
+                    // 单击切换
+                    if (currentState === STATE.TREE) {
+                        currentState = STATE.SCATTER;
+                        updateUI(STATE.SCATTER);
+                    } else {
+                        currentState = STATE.TREE;
+                        updateUI(STATE.TREE);
+                    }
+                    lastTapTime = now;
+                }
+                handX = 0; handY = 0;
+            });
+        }
+
+        // --- 5. 动画循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            if (bgStars) {
+                bgStars.rotation.y = time * 0.02;
+                bgStars.rotation.z = time * 0.01;
+            }
+
+            // 相机逻辑
+            if (!isIntroFinished) {
+                camera.position.z += (25 - camera.position.z) * 0.03;
+                camera.lookAt(0,0,0);
+            } else if (currentState === STATE.SCATTER) {
+                const controlX = isHandPresent ? handX : (isTouching ? handX * 2 : 0);
+                const controlY = isHandPresent ? handY : (isTouching ? handY * 2 : 0);
+                
+                // 1. 视角旋转
+                camera.position.x += (controlX * 28 - camera.position.x) * 0.08; 
+                camera.position.y += (controlY * 18 - camera.position.y) * 0.08;
+                
+                // 2. 深度控制 (基于手掌张开程度)
+                // 映射 handSpread (0.1闭合 ~ 0.4张开) 到 Z轴 (50远 ~ 15近)
+                // 张开 -> Z变小(近); 闭合 -> Z变大(远)
+                let targetZ = 50 - (handSpread - 0.1) / (0.4 - 0.1) * 35;
+                // 限制范围
+                targetZ = Math.max(15, Math.min(55, targetZ));
+                
+                camera.position.z += (targetZ - camera.position.z) * 0.05;
+                
+                camera.lookAt(0,0,0);
+            } else if (currentState === STATE.TREE) {
+                const r = 22;
+                camera.position.x = Math.sin(time * 0.15) * r;
+                camera.position.z = Math.cos(time * 0.15) * r;
+                camera.position.y = Math.sin(time * 0.05) * 4;
+                camera.lookAt(0, 1, 0); 
+            }
+
+            const moveSpeed = isIntroFinished ? 3.0 * dt : 1.5 * dt; 
+
+            // 遍历所有组 (现在支持每个 group.id 对应多个 mesh)
+            GROUPS.forEach(group => {
+                const meshArray = meshes[group.id];
+                const posArrayArray = positions[group.id];
+                
+                if (!meshArray) return;
+
+                meshArray.forEach((mesh, meshIndex) => {
+                    const currentPos = posArrayArray[meshIndex];
+                    let targetSet;
+                    
+                    if (!isIntroFinished) targetSet = mesh.userData.tree; 
+                    else if (currentState === STATE.DETAIL) targetSet = mesh.userData.scatter;
+                    else targetSet = mesh.userData[currentState];
+
+                    const count = mesh.count;
+
+                    for (let i = 0; i < count; i++) {
+                        const t = targetSet[i];
+                        const c = currentPos[i];
+                        
+                        let tx = t.x, ty = t.y, tz = t.z;
+                        
+                        if (currentState === STATE.DETAIL) {
+                            // Detail 模式逻辑：如果是随机选中的那个 Mesh 的那个粒子，就展示，而且变得非常大、非常近
+                            if (group.id === 'card' && meshIndex === detailTarget.meshIndex && i === detailTarget.instanceIndex) {
+                                tx = 0; ty = 0; tz = 25; // 距离相机非常近
+                            } else {
+                                tx *= 1.8; ty *= 1.8; tz -= 10;
+                            }
+                        } 
+                        else if (currentState === STATE.TREE) {
+                             if (group.id === 'star' || group.id === 'orb') {
+                                 const dist = Math.sqrt(tx*tx + tz*tz);
+                                 tx += Math.sin(time * 3 + ty) * 0.02 * dist; 
+                                 tz += Math.cos(time * 3 + ty) * 0.02 * dist;
+                             }
+                        }
+
+                        c.x += (tx - c.x) * moveSpeed;
+                        c.y += (ty - c.y) * moveSpeed;
+                        c.z += (tz - c.z) * moveSpeed;
+                        
+                        if (group.id === 'orb' || group.id === 'star') {
+                            c.rx += dt * 0.5; c.ry += dt * 0.5; 
+                        } else if (group.id === 'card' && currentState === STATE.DETAIL && meshIndex === detailTarget.meshIndex && i === detailTarget.instanceIndex) {
+                            c.rx = 0; c.ry = Math.sin(time)*0.1; c.rz = Math.cos(time)*0.05; 
+                        } else {
+                            c.rx += (t.rx - c.rx) * moveSpeed;
+                            c.ry += (t.ry - c.ry) * moveSpeed;
+                            c.rz += (t.rz - c.rz) * moveSpeed;
+                        }
+
+                        dummy.position.set(c.x, c.y, c.z);
+                        dummy.rotation.set(c.rx, c.ry, c.rz);
+                        
+                        let scale = 1;
+                        if (group.id === 'card' && currentState === STATE.DETAIL && meshIndex === detailTarget.meshIndex && i === detailTarget.instanceIndex) scale = 10; // 放大10倍
+                        else if (group.id === 'star') scale = 1 + Math.sin(time*5 + i)*0.4; 
+                        
+                        dummy.scale.set(scale, scale, scale);
+                        dummy.updateMatrix();
+                        mesh.setMatrixAt(i, dummy.matrix);
+                    }
+                    mesh.instanceMatrix.needsUpdate = true;
+                });
+            });
+
+            composer.render();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- AI 手势 ---
+        function loadScript(url) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = url; script.crossOrigin = "anonymous";
+                script.onload = resolve; script.onerror = reject;
+                document.body.appendChild(script);
+            });
+        }
+
+        async function setupAI() {
+            await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js");
+            await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js");
+            await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js");
+            await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js");
+
+            const videoElement = document.getElementById('input-video');
+            const hands = new window.Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+
+            hands.setOptions({
+                maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6
+            });
+            hands.onResults(onResults);
+
+            const cameraUtils = new window.Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 320, height: 240
+            });
+            cameraUtils.start();
+        }
+
+        function onResults(results) {
+            if (!isIntroFinished || isTouching) return; 
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandPresent = true;
+                const lm = results.multiHandLandmarks[0];
+                handX = (lm[9].x - 0.5) * -2; handY = (lm[9].y - 0.5) * -2;
+                detectGesture(lm);
+            } else isHandPresent = false;
+        }
+
+        function detectGesture(lm) {
+            // 计算手指尖到手腕的距离，判断张开程度
+            const tips = [8, 12, 16, 20];
+            let totalDist = 0;
+            tips.forEach(tip => {
+                totalDist += Math.sqrt(Math.pow(lm[tip].x - lm[0].x, 2) + Math.pow(lm[tip].y - lm[0].y, 2));
+            });
+            // 归一化平均距离作为手掌张开系数
+            handSpread = totalDist / 4; 
+
+            // 常规状态判断
+            const dist = (i, j) => Math.sqrt(Math.pow(lm[i].x-lm[j].x, 2) + Math.pow(lm[i].y-lm[j].y, 2));
+            const fingerTips = [8, 12, 16, 20]; const fingerBases = [5, 9, 13, 17];
+            const isExt = [false, false, false, false, false]; 
+            if (dist(4, 17) > 0.25) isExt[0] = true;
+            for(let k=0; k<4; k++) if (dist(fingerTips[k], 0) > dist(fingerBases[k], 0) + 0.05) isExt[k+1] = true;
+
+            const extCount = isExt.filter(Boolean).length;
+            const isPinching = dist(4, 8) < 0.06;
+
+            let newState = currentState;
+            
+            if (extCount <= 1) newState = STATE.TREE; 
+            else if (isPinching) newState = STATE.DETAIL;
+            else if (extCount >= 4) newState = STATE.SCATTER; 
+
+            if (newState !== currentState) {
+                if (newState === STATE.DETAIL) pickRandomDetailTarget(); // 进入 Detail 前随机选择
+                currentState = newState;
+                updateUI(currentState);
+            }
+        }
+
+        function updateUI(state) {
+            const el = document.getElementById('state-text');
+            let color = '#FFF', text = '';
+            switch(state) {
+                case STATE.TREE: text = "圣诞树"; color = '#2E8B57'; break;
+                case STATE.SCATTER: text = "星河散落"; color = '#D4AF37'; break;
+                case STATE.DETAIL: text = "美好回忆"; color = '#FFF'; break;
+            }
+            el.innerText = text; el.style.color = color; el.style.textShadow = `0 0 30px ${color}`;
+        }
+
+        initThree();
+        setupAI();
+        animate();
+    </script>
+</body>
+</html>
